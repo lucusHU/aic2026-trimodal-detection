@@ -1,0 +1,105 @@
+# =====================================================================
+# bisai/configs/dfine_hgnetv2_l_bisai.yml
+# 自定义数据集 + 已下载的预训练权重微调 D-FINE（L 规模）
+# 前提目录结构（相对 bisai/ 运行目录）：
+#   bisai/
+#   ├── dataset/images/{train,val}/
+#   ├── dataset/annotations/{instances_train.json, instances_val.json}
+#   ├── weights/dfine_l_obj365.pth        ← 你下载的预训练权重
+#   ├── configs/dfine_hgnetv2_l_bisai.yml ← 本文件
+#   └── output/                           ← 训练输出（自动生成）
+#   D-Fine 仓库与 bisai 同级，保持原样、零修改。
+# 注意：本文件只在 bisai/ 目录下执行时路径才正确（run_train.sh 已处理）。
+# =====================================================================
+
+# __include__ 相对路径是相对“本文件所在目录”解析的，
+# 所以这里直接指回 D-Fine 仓库里的公共配置（仓库不动）。
+__include__: [
+  '../../D-FINE/configs/runtime.yml',
+  '../../D-FINE/configs/dfine/include/dataloader.yml',
+  '../../D-FINE/configs/dfine/include/optimizer.yml',
+  '../../D-FINE/configs/dfine/include/dfine_hgnetv2.yml',
+]
+
+output_dir: ./output/dfine_l_test
+
+task: detection
+
+eval_spatial_size: [800, 800]
+
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox', ]
+
+num_classes: 12                    # ←←← 改成你比赛数据集的类别数
+remap_mscoco_category: False      # 自定义数据集必须 False，防类别 ID 映射到 MSCOCO
+
+train_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    img_folder: dataset/images/train
+    ann_file: dataset/annotations/instances_train.json
+    return_masks: False
+    transforms:
+      type: Compose
+      policy:
+        epoch: 42               # 30 epoch 后停增广（配合微调 36 epoch）
+  shuffle: True
+  num_workers: 4
+  drop_last: True
+  total_batch_size: 4
+  collate_fn:
+    type: BatchImageCollateFunction
+    stop_epoch: 42
+    ema_restart_decay: 0.9999
+    base_size_repeat: 4
+  # total_batch_size 默认 32（来自 dataloader.yml）；卡少/显存不够时取消下一行注释
+  # total_batch_size: 4
+
+val_dataloader:
+  type: DataLoader
+  collate_fn:
+    type: BatchImageCollateFunction
+  total_batch_size: 4
+  dataset:
+    type: CocoDetection
+    img_folder: dataset/images/val
+    ann_file: dataset/annotations/instances_val.json
+    return_masks: False
+    transforms:
+      type: Compose
+  shuffle: False
+  num_workers: 4
+
+DFINE:
+  backbone: HGNetv2
+
+HGNetv2:
+  name: 'B4'                      # L 规模用 B4；换规模需同步改整块超参
+  return_idx: [1, 2, 3]
+  freeze_stem_only: True
+  freeze_at: 0
+  freeze_norm: True
+  pretrained: False               # 已用 -t 加载本地权重，禁止自动下载 backbone
+
+optimizer:
+  type: AdamW
+  params:
+    -
+      params: '^(?=.*backbone)(?!.*norm|bn).*$'
+      lr: 0.0000125
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.
+  lr: 0.00025
+  betas: [0.9, 0.999]
+  weight_decay: 0.000125
+
+epochs: 3                      # 预训练权重微调：早停 36 epoch
+ema:
+  warmups: 0
+
+lr_warmup_scheduler:
+  warmup_duration: 0
+

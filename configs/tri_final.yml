@@ -1,0 +1,159 @@
+__include__: [
+  '../../D-FINE/configs/runtime.yml',
+  '../../D-FINE/configs/dfine/include/dataloader_800.yml',
+  '../../D-FINE/configs/dfine/include/optimizer.yml',
+  '../../D-FINE/configs/dfine/include/dfine_hgnetv2_800.yml',
+]
+
+# ==========================================================
+# 三模态最终版（DSH 定稿）
+#
+# 依据：
+#  1) 起点必须用 EMA 权重（raw['model'] 只有 0.5373，ema 才是 0.5660）。
+#     已实测：本配置 + output/tri_init.pth 未训练即 val mAP = 0.566。
+#  2) ZeroGatedFuse 零初始化 → 第 0 步与原 RGB 模型逐位相同，"不可能降分"是构造性保证。
+#  3) codex 独立评审：零初始化残差的生长速度 ∝ lr，1500~3000 步 × 5e-4 长不起来，
+#     → 把注入路径（aux_stem / fuse / gate）lr 提到 5e-3（10×）。
+#  4) DEIM / LibreYOLO 实践：短微调应尽早关掉强增强，否则 lr 尾巴无法收尾，
+#     且 RandomIoUCrop 在 5 通道上极慢（实测会把 epoch 从 2 分钟拖到 8 分钟）。
+# ==========================================================
+
+output_dir: ./output/tri_final
+
+task: detection
+eval_spatial_size: [800, 800]
+
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox',]
+
+num_classes: 12
+remap_mscoco_category: False
+
+model: TriModalDFINE
+
+
+# =========================
+# 数据集（三模态，5 通道）
+# =========================
+
+train_dataloader:
+  type: DataLoader
+
+  dataset:
+    type: TriCocoDetection
+    img_folder: dataset/images/train
+    ann_file: dataset/annotations/instances_train.json
+    return_masks: False
+    aux_folders: ['dataset/tri/train/infrared', 'dataset/tri/train/depth']
+
+    transforms:
+      type: Compose
+      ops:
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: RandomHorizontalFlip}
+        - {type: Resize, size: [800, 800], }
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+        - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
+
+  shuffle: True
+  num_workers: 4
+  drop_last: True
+
+  total_batch_size: 16
+
+  collate_fn:
+    type: BatchImageCollateFunction
+    stop_epoch: 8
+    ema_restart_decay: 0.9999
+    base_size: 800
+    base_size_repeat: 4
+
+
+val_dataloader:
+  type: DataLoader
+
+  dataset:
+    type: TriCocoDetection
+    img_folder: dataset/images/val
+    ann_file: dataset/annotations/instances_val.json
+    return_masks: False
+    aux_folders: ['dataset/tri/val/infrared', 'dataset/tri/val/depth']
+
+    transforms:
+      type: Compose
+      ops:
+        - {type: Resize, size: [800, 800], }
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+
+  shuffle: False
+  num_workers: 4
+
+  total_batch_size: 16
+
+  collate_fn:
+    type: BatchImageCollateFunction
+
+
+# =========================
+# 模型：零初始化门控中融合
+# =========================
+
+TriModalDFINE:
+  backbone: HGNetv2
+  encoder: HybridEncoder
+  decoder: DFINETransformer
+  aux_in_ch: 2
+  aux_width: 32
+  gate_bias: 1.0
+
+HGNetv2:
+  name: 'B4'
+  return_idx: [1, 2, 3]
+
+  freeze_stem_only: True
+  freeze_at: 0
+  freeze_norm: True
+
+  pretrained: False
+
+
+# =========================
+# 优化器：预训练主体近冻结；注入路径 10× lr
+# =========================
+
+optimizer:
+  type: AdamW
+
+  params:
+    -
+      params: '^(?=.*backbone)(?!.*norm|bn).*$'
+      lr: 0.000001
+
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.
+
+    -
+      params: '^(?=.*(?:aux_stem|aux_s2|aux_s3|aux_s4|aux_s5|fuse)).*$'
+      lr: 0.005
+      weight_decay: 0.
+
+  lr: 0.000001
+
+  betas: [0.9, 0.999]
+  weight_decay: 0.000125
+
+
+# =========================
+# 训练轮数：24 epoch × ~2.2 min ≈ 53 min
+# =========================
+
+epochs: 24
+
+ema:
+  warmups: 0
+
+lr_warmup_scheduler:
+  warmup_duration: 0

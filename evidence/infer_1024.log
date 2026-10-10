@@ -1,0 +1,11 @@
+[info] images: 1000
+[info] sizes=[800, 1024]  nms_iou=0.70  max_det=100  conf=0.001
+[fwd] size=800  128s
+[fwd] size=1024  275s
+  wrote 250/1000  (276s)
+  wrote 500/1000  (276s)
+  wrote 750/1000  (277s)
+  wrote 1000/1000  (278s)
+[done] txt dir: submit/seed1_ms800_1024_nms07  (1000 files, 100000 boxes)
+[done] zip     : /home/adlab7/ssd/bigdatan/jingsai/bisai/zip/seed1_ms800_1024_nms07.zip
+[done] elapsed : 278s

@@ -1,0 +1,162 @@
+__include__: [
+  '../../D-FINE/configs/runtime.yml',
+  '../../D-FINE/configs/dfine/include/dataloader_800.yml',
+  '../../D-FINE/configs/dfine/include/optimizer.yml',
+  '../../D-FINE/configs/dfine/include/dfine_hgnetv2_800.yml',
+]
+
+# ==========================================================
+# 三模态实验：RGB + Infrared + Depth
+#   模型：TriModalDFINE（MCF 零初始化门控中融合，P3/P4/P5）
+#   加载权重的那一刻 == 原 RGB D-FINE，因此不可能降分
+# ==========================================================
+
+output_dir: ./output/tri_p3
+
+task: detection
+eval_spatial_size: [800, 800]
+
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox',]
+
+num_classes: 12
+remap_mscoco_category: False
+
+# 关键：换成三模态模型类
+model: TriModalDFINE
+
+
+# =========================
+# 数据集（三模态，5 通道）
+# =========================
+
+train_dataloader:
+  type: DataLoader
+
+  dataset:
+    type: TriCocoDetection
+    img_folder: dataset/images/train
+    ann_file: dataset/annotations/instances_train.json
+    return_masks: False
+    aux_folders: ['dataset/tri/train/infrared', 'dataset/tri/train/depth']
+
+    transforms:
+      type: Compose
+      # 注意：已移除 RandomPhotometricDistort（不支持 5 通道）
+      ops:
+        - {type: RandomZoomOut, fill: 0}
+        - {type: RandomIoUCrop, p: 0.8}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: RandomHorizontalFlip}
+        - {type: Resize, size: [800, 800], }
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+        - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
+      policy:
+        name: stop_epoch
+        epoch: 14
+        ops: ['RandomZoomOut', 'RandomIoUCrop']
+
+  shuffle: True
+  num_workers: 4
+  drop_last: True
+
+  total_batch_size: 12
+
+  collate_fn:
+    type: BatchImageCollateFunction
+    stop_epoch: 14
+    ema_restart_decay: 0.9999
+    base_size: 800
+    base_size_repeat: 4
+
+
+val_dataloader:
+  type: DataLoader
+
+  dataset:
+    type: TriCocoDetection
+    img_folder: dataset/images/val
+    ann_file: dataset/annotations/instances_val.json
+    return_masks: False
+    aux_folders: ['dataset/tri/val/infrared', 'dataset/tri/val/depth']
+
+    transforms:
+      type: Compose
+      ops:
+        - {type: Resize, size: [800, 800], }
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+
+  shuffle: False
+  num_workers: 4
+
+  total_batch_size: 12
+
+  collate_fn:
+    type: BatchImageCollateFunction
+
+
+# =========================
+# 模型
+# =========================
+
+TriModalDFINE:
+  backbone: HGNetv2
+  encoder: HybridEncoder
+  decoder: DFINETransformer
+  aux_in_ch: 2
+  aux_width: 32
+  gate_bias: 1.0
+
+HGNetv2:
+  name: 'B4'
+  return_idx: [1, 2, 3]
+
+  freeze_stem_only: True
+  freeze_at: 0
+  freeze_norm: True
+
+  pretrained: False
+
+
+# =========================
+# 优化器（MCF 分层学习率）
+#   主干极低 lr 保护 RGB 预训练知识
+#   新增 aux/fuse 支路高 lr 快速学习
+# =========================
+
+optimizer:
+  type: AdamW
+
+  params:
+    -
+      params: '^(?=.*backbone)(?!.*norm|bn).*$'
+      lr: 0.0000125
+
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.
+
+    -
+      params: '^(?=.*(?:aux_stem|aux_s2|aux_s3|aux_s4|aux_s5|fuse)).*$'
+      lr: 0.0005
+      weight_decay: 0.
+
+  lr: 0.00006
+
+  betas: [0.9, 0.999]
+  weight_decay: 0.000125
+
+
+# =========================
+# 训练轮数
+# =========================
+
+epochs: 18
+
+ema:
+  warmups: 0
+
+lr_warmup_scheduler:
+  warmup_duration: 0

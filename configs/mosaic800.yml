@@ -1,0 +1,111 @@
+# =====================================================================
+# configs/mosaic800.yml
+# 在已验证最强的 baseline_800 基础上只加 Mosaic 增强：
+#   - 输入仍为 stretch 800x800（与 baseline 完全一致，推理端无需改动）
+#   - ops 开头插入 Mosaic(size=800)：4 图拼接 -> 随机裁 800x800
+#   - 4 卡 DDP，total_batch_size 16
+# 目的：训练集仅 1700 张、epoch43 即饱和，用 Mosaic 缓解过拟合
+# =====================================================================
+
+__include__: [
+  '../../D-FINE/configs/runtime.yml',
+  '../../D-FINE/configs/dfine/include/dataloader_800.yml',
+  '../../D-FINE/configs/dfine/include/optimizer.yml',
+  '../../D-FINE/configs/dfine/include/dfine_hgnetv2_800.yml',
+]
+
+output_dir: ./output/mosaic800
+
+task: detection
+eval_spatial_size: [800, 800]
+
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox', ]
+
+num_classes: 12
+remap_mscoco_category: False
+
+train_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    img_folder: dataset/images/train
+    ann_file: dataset/annotations/instances_train.json
+    return_masks: False
+    transforms:
+      type: Compose
+      ops:
+        - {type: Mosaic, size: 800}
+        - {type: RandomPhotometricDistort, p: 0.5}
+        - {type: RandomZoomOut, fill: 0}
+        - {type: RandomIoUCrop, p: 0.8}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: RandomHorizontalFlip}
+        - {type: Resize, size: [800, 800], }
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+        - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
+      policy:
+        name: stop_epoch
+        epoch: 18
+        ops: ['Mosaic', 'RandomPhotometricDistort', 'RandomZoomOut', 'RandomIoUCrop']
+  shuffle: True
+  num_workers: 4
+  drop_last: True
+  total_batch_size: 16
+  collate_fn:
+    type: BatchImageCollateFunction
+    base_size: 800
+    base_size_repeat: 4
+    stop_epoch: 18
+    ema_restart_decay: 0.9999
+
+val_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    img_folder: dataset/images/val
+    ann_file: dataset/annotations/instances_val.json
+    return_masks: False
+    transforms:
+      type: Compose
+      ops:
+        - {type: Resize, size: [800, 800], }
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+  collate_fn:
+    type: BatchImageCollateFunction
+  shuffle: False
+  num_workers: 4
+  total_batch_size: 16
+
+DFINE:
+  backbone: HGNetv2
+
+HGNetv2:
+  name: 'B4'
+  return_idx: [1, 2, 3]
+  freeze_stem_only: True
+  freeze_at: 0
+  freeze_norm: True
+  pretrained: False
+
+optimizer:
+  type: AdamW
+  params:
+    -
+      params: '^(?=.*backbone)(?!.*norm|bn).*$'
+      lr: 0.0000125
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.
+  lr: 0.00025
+  betas: [0.9, 0.999]
+  weight_decay: 0.000125
+
+epochs: 20
+ema:
+  warmups: 0
+
+lr_warmup_scheduler:
+  warmup_duration: 300

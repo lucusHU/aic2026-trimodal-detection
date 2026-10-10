@@ -1,0 +1,46 @@
+# --- competition data: NEVER commit ---
+dataset/
+data/
+*.jpg
+*.jpeg
+*.png
+!docs/**/*.png
+*.npy
+*.npz
+*.pkl
+
+# --- checkpoints / weights: too large, third-party ---
+weights/
+output/
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.engine
+
+# --- submissions / archives ---
+submit/
+zip/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# --- run artefacts ---
+logs/
+runs/
+wandb/
+*.log
+!evidence/*.log
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# --- editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

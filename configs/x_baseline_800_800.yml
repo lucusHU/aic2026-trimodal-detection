@@ -1,0 +1,100 @@
+__include__: [
+  '../../D-FINE/configs/runtime.yml',
+  '../../D-FINE/configs/dfine/include/dataloader_800.yml',
+  '../../D-FINE/configs/dfine/include/optimizer.yml',
+  '../../D-FINE/configs/dfine/include/dfine_hgnetv2_800.yml',
+]
+
+# =========================
+# 基础设置
+# =========================
+
+output_dir: ./output/x_baseline_800_800
+
+task: detection
+eval_spatial_size: [800, 800]
+
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox',]
+
+num_classes: 12
+remap_mscoco_category: False
+
+
+# =========================
+# 数据集
+# =========================
+
+train_dataloader:
+  type: DataLoader
+
+  dataset:
+    type: CocoDetection
+    img_folder: dataset/images/train
+    ann_file: dataset/annotations/instances_train.json
+    return_masks: False
+
+    transforms:
+      type: Compose
+      policy:
+        epoch: 50
+
+  shuffle: True
+  num_workers: 4
+  drop_last: True
+
+  # 单卡固定 batch
+  total_batch_size: 12
+
+  collate_fn:
+    type: BatchImageCollateFunction
+    stop_epoch: 50
+    ema_restart_decay: 0.9999
+    base_size_repeat: 4
+
+
+val_dataloader:
+  type: DataLoader
+
+  dataset:
+    type: CocoDetection
+    img_folder: dataset/images/val
+    ann_file: dataset/annotations/instances_val.json
+    return_masks: False
+
+    transforms:
+      type: Compose
+
+  shuffle: False
+  num_workers: 4
+
+  # 单卡验证 batch
+  total_batch_size: 12
+
+  collate_fn:
+    type: BatchImageCollateFunction
+
+
+# =========================
+# D-FINE-X
+# =========================
+HGNetv2:
+  name: 'B5'
+  return_idx: [1, 2, 3]
+  freeze_stem_only: True
+  freeze_at: 0
+  freeze_norm: True
+  pretrained: False
+
+HybridEncoder:
+  hidden_dim: 384
+  dim_feedforward: 2048
+
+DFINETransformer:
+  feat_channels: [384, 384, 384]
+  reg_scale: 8
+
+  # 使用 -t 加载 Objects365 权重
+
+sync_bn: False

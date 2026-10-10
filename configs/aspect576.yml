@@ -1,0 +1,113 @@
+# =====================================================================
+# configs/aspect576.yml
+# 与 baseline_800 的唯一结构性差异：输入改为「保持长宽比」的 576x1024
+#   - 数据集全部为 16:9（1920x1080 / 640x360）
+#   - Resize size 传整数 -> torchvision 等比缩放 -> 统一 576x1024，无拉伸形变
+#   - 关闭 collate 多尺度（base_size_repeat），否则 F.interpolate 会强制方形
+# 其余超参与 baseline_800 保持一致，保证对比干净
+# =====================================================================
+
+__include__: [
+  '../../D-FINE/configs/runtime.yml',
+  '../../D-FINE/configs/dfine/include/optimizer.yml',
+  '../../D-FINE/configs/dfine/include/dfine_hgnetv2_800.yml',
+]
+
+output_dir: ./output/aspect576
+
+task: detection
+
+eval_spatial_size: [576, 1024]   # h w，16:9 等比
+
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox', ]
+
+num_classes: 12
+remap_mscoco_category: False
+
+train_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    img_folder: dataset/images/train
+    ann_file: dataset/annotations/instances_train.json
+    return_masks: False
+    transforms:
+      type: Compose
+      ops:
+        - {type: RandomPhotometricDistort, p: 0.5}
+        - {type: RandomZoomOut, fill: 0}
+        - {type: RandomIoUCrop, p: 0.8}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: RandomHorizontalFlip}
+        - {type: Resize, size: [576, 1024]}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+        - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
+      policy:
+        name: stop_epoch
+        epoch: 50
+        ops: ['RandomPhotometricDistort', 'RandomZoomOut', 'RandomIoUCrop']
+  shuffle: True
+  num_workers: 4
+  drop_last: True
+  total_batch_size: 16
+  collate_fn:
+    type: BatchImageCollateFunction
+    # base_size 不参与真实训练（base_size_repeat 为 None -> scales=None -> 不插值）,
+    # 仅供 D-FINE 的 stats() 造 FLOPs 哑输入 (1,3,base_size,base_size)。
+    # 取 768: 768/32=24 -> 24x24=576 个 token, 与 eval_spatial_size [576,1024]
+    # (18x32=576) 的 pos_embed 数量一致, 避免 shape 不匹配。
+    base_size: 768
+    stop_epoch: 50
+    ema_restart_decay: 0.9999
+
+val_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    img_folder: dataset/images/val
+    ann_file: dataset/annotations/instances_val.json
+    return_masks: False
+    transforms:
+      type: Compose
+      ops:
+        - {type: Resize, size: [576, 1024]}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+  collate_fn:
+    type: BatchImageCollateFunction
+  shuffle: False
+  num_workers: 4
+  total_batch_size: 16
+
+DFINE:
+  backbone: HGNetv2
+
+HGNetv2:
+  name: 'B4'
+  return_idx: [1, 2, 3]
+  freeze_stem_only: True
+  freeze_at: 0
+  freeze_norm: True
+  pretrained: False
+
+optimizer:
+  type: AdamW
+  params:
+    -
+      params: '^(?=.*backbone)(?!.*norm|bn).*$'
+      lr: 0.0000125
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.
+  lr: 0.00025
+  betas: [0.9, 0.999]
+  weight_decay: 0.000125
+
+epochs: 50
+ema:
+  warmups: 0
+
+lr_warmup_scheduler:
+  warmup_duration: 500

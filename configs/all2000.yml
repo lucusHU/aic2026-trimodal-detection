@@ -1,0 +1,91 @@
+__include__: [
+  '../../D-FINE/configs/runtime.yml',
+  '../../D-FINE/configs/dfine/include/dataloader_800.yml',
+  '../../D-FINE/configs/dfine/include/optimizer.yml',
+  '../../D-FINE/configs/dfine/include/dfine_hgnetv2_800.yml',
+]
+
+# baseline_800 配方完全不变，只把训练数据从 train(1700) 换成 train+val(2000)。
+# 注意：val 300 已被吃进训练集，log 里的 val mAP 是「训练集内」分数，不可与 0.5542 直接比。
+# 用途：最终提交模型（更多数据 -> 测试集上更稳）。
+
+output_dir: ./output/all2000
+
+task: detection
+eval_spatial_size: [800, 800]
+
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox',]
+
+num_classes: 12
+remap_mscoco_category: False
+
+train_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    img_folder: dataset/images/all
+    ann_file: dataset/annotations/instances_all.json
+    return_masks: False
+    transforms:
+      type: Compose
+      policy:
+        epoch: 50
+  shuffle: True
+  num_workers: 4
+  drop_last: True
+  total_batch_size: 8
+  collate_fn:
+    type: BatchImageCollateFunction
+    stop_epoch: 50
+    ema_restart_decay: 0.9999
+    base_size_repeat: 4
+
+# 仅做训练健全性观察（in-sample）
+val_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    img_folder: dataset/images/val
+    ann_file: dataset/annotations/instances_val.json
+    return_masks: False
+    transforms:
+      type: Compose
+  shuffle: False
+  num_workers: 4
+  total_batch_size: 4
+  collate_fn:
+    type: BatchImageCollateFunction
+
+DFINE:
+  backbone: HGNetv2
+
+HGNetv2:
+  name: 'B4'
+  return_idx: [1, 2, 3]
+  freeze_stem_only: True
+  freeze_at: 0
+  freeze_norm: True
+  pretrained: False
+
+optimizer:
+  type: AdamW
+  params:
+    -
+      params: '^(?=.*backbone)(?!.*norm|bn).*$'
+      lr: 0.0000125
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.
+  lr: 0.00025
+  betas: [0.9, 0.999]
+  weight_decay: 0.000125
+
+epochs: 56
+
+ema:
+  warmups: 0
+
+lr_warmup_scheduler:
+  warmup_duration: 0

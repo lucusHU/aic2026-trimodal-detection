@@ -1,0 +1,152 @@
+﻿__include__: [
+  '../../D-FINE/configs/runtime.yml',
+  '../../D-FINE/configs/dfine/include/dataloader_800.yml',
+  '../../D-FINE/configs/dfine/include/optimizer.yml',
+  '../../D-FINE/configs/dfine/include/dfine_hgnetv2_800.yml',
+]
+
+# ==========================================================
+# 涓夋ā鎬佹渶缁堢増锛圖SH 瀹氱锛?#
+# 渚濇嵁锛?#  1) 璧风偣蹇呴』鐢?EMA 鏉冮噸锛坮aw['model'] 鍙湁 0.5373锛宔ma 鎵嶆槸 0.5660锛夈€?#     宸插疄娴嬶細鏈厤缃?+ output/tri_init.pth 鏈缁冨嵆 val mAP = 0.566銆?#  2) ZeroGatedFuse 闆跺垵濮嬪寲 鈫?绗?0 姝ヤ笌鍘?RGB 妯″瀷閫愪綅鐩稿悓锛?涓嶅彲鑳介檷鍒?鏄瀯閫犳€т繚璇併€?#  3) codex 鐙珛璇勫锛氶浂鍒濆鍖栨畫宸殑鐢熼暱閫熷害 鈭?lr锛?500~3000 姝?脳 5e-4 闀夸笉璧锋潵锛?#     鈫?鎶婃敞鍏ヨ矾寰勶紙aux_stem / fuse / gate锛塴r 鎻愬埌 5e-3锛?0脳锛夈€?#  4) DEIM / LibreYOLO 瀹炶返锛氱煭寰皟搴斿敖鏃╁叧鎺夊己澧炲己锛屽惁鍒?lr 灏惧反鏃犳硶鏀跺熬锛?#     涓?RandomIoUCrop 鍦?5 閫氶亾涓婃瀬鎱紙瀹炴祴浼氭妸 epoch 浠?2 鍒嗛挓鎷栧埌 8 鍒嗛挓锛夈€?# ==========================================================
+
+output_dir: ./output/tri_bold
+
+task: detection
+eval_spatial_size: [800, 800]
+
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox',]
+
+num_classes: 12
+remap_mscoco_category: False
+
+model: TriModalDFINE
+
+
+# =========================
+# 鏁版嵁闆嗭紙涓夋ā鎬侊紝5 閫氶亾锛?# =========================
+
+train_dataloader:
+  type: DataLoader
+
+  dataset:
+    type: TriCocoDetection
+    img_folder: dataset/images/train
+    ann_file: dataset/annotations/instances_train.json
+    return_masks: False
+    aux_folders: ['dataset/tri/train/infrared', 'dataset/tri/train/depth']
+
+    transforms:
+      type: Compose
+      ops:
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: RandomHorizontalFlip}
+        - {type: Resize, size: [800, 800], }
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+        - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
+
+  shuffle: True
+  num_workers: 2
+  drop_last: True
+
+  total_batch_size: 16
+
+  collate_fn:
+    type: BatchImageCollateFunction
+    stop_epoch: 16
+    ema_restart_decay: 0.9999
+    base_size: 800
+    base_size_repeat: 4
+
+
+val_dataloader:
+  type: DataLoader
+
+  dataset:
+    type: TriCocoDetection
+    img_folder: dataset/images/val
+    ann_file: dataset/annotations/instances_val.json
+    return_masks: False
+    aux_folders: ['dataset/tri/val/infrared', 'dataset/tri/val/depth']
+
+    transforms:
+      type: Compose
+      ops:
+        - {type: Resize, size: [800, 800], }
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+
+  shuffle: False
+  num_workers: 2
+
+  total_batch_size: 16
+
+  collate_fn:
+    type: BatchImageCollateFunction
+
+
+# =========================
+# 妯″瀷锛氶浂鍒濆鍖栭棬鎺т腑铻嶅悎
+# =========================
+
+TriModalDFINE:
+  backbone: HGNetv2
+  encoder: HybridEncoder
+  decoder: DFINETransformer
+  aux_in_ch: 2
+  aux_width: 32
+  gate_bias: 1.0
+
+HGNetv2:
+  name: 'B4'
+  return_idx: [1, 2, 3]
+
+  freeze_stem_only: True
+  freeze_at: 0
+  freeze_norm: True
+
+  pretrained: False
+
+
+# =========================
+# 浼樺寲鍣細棰勮缁冧富浣撹繎鍐荤粨锛涙敞鍏ヨ矾寰?10脳 lr
+# =========================
+
+optimizer:
+  type: AdamW
+
+  params:
+    -
+      params: '^(?=.*backbone)(?!.*norm|bn).*$'
+      lr: 0.000005
+
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.
+
+    -
+      params: '^(?=.*(?:aux_stem|aux_s2|aux_s3|aux_s4|aux_s5|fuse)).*$'
+      lr: 0.005
+      weight_decay: 0.
+
+  lr: 0.00003
+
+  betas: [0.9, 0.999]
+  weight_decay: 0.000125
+
+
+# =========================
+# 璁粌杞暟锛?4 epoch 脳 ~2.2 min 鈮?53 min
+# =========================
+
+epochs: 16
+
+ema:
+  warmups: 0
+
+lr_warmup_scheduler:
+  warmup_duration: 0
+
+
+

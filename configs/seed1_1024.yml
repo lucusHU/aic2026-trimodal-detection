@@ -1,0 +1,136 @@
+__include__: [
+  '../../D-FINE/configs/runtime.yml',
+  '../../D-FINE/configs/dfine/include/dataloader_800.yml',
+  '../../D-FINE/configs/dfine/include/optimizer.yml',
+  '../../D-FINE/configs/dfine/include/dfine_hgnetv2_800.yml',
+]
+
+# ==========================================================
+# 高分辨率微调（800 -> 1024）
+#
+# 依据：
+#  - 我们模型的 APs 只有 0.28~0.29，是最大短板；APl 已 0.72。
+#  - 训练尺度带 576~992，实测最优推理尺度 928 = 尺度带上沿 → 模型「尺度饥饿」。
+#  - 同机「城市之光」线上 59.92 用的就是高分辨率多尺度（1280/1536/1920）推理。
+#  - 因此把训练尺度抬到 1024，看能否把最优推理尺度一起抬上去。
+#
+# 从 seed1 的 **EMA** 权重热启动（0.5660，不是 raw 的 0.5373）。
+# lr 取基线的 1/10，12 epoch，短微调。
+# ==========================================================
+
+output_dir: ./output/seed1_1024
+
+task: detection
+eval_spatial_size: [1024, 1024]
+
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox',]
+
+num_classes: 12
+remap_mscoco_category: False
+
+
+train_dataloader:
+  type: DataLoader
+
+  dataset:
+    type: CocoDetection
+    img_folder: dataset/images/train
+    ann_file: dataset/annotations/instances_train.json
+    return_masks: False
+
+    transforms:
+      type: Compose
+      ops:
+        - {type: RandomPhotometricDistort, p: 0.5}
+        - {type: RandomZoomOut, fill: 0}
+        - {type: RandomIoUCrop, p: 0.8}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: RandomHorizontalFlip}
+        - {type: Resize, size: [1024, 1024], }
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+        - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
+      policy:
+        name: stop_epoch
+        epoch: 8
+        ops: ['RandomZoomOut', 'RandomIoUCrop']
+
+  shuffle: True
+  num_workers: 4
+  drop_last: True
+
+  total_batch_size: 8
+
+  collate_fn:
+    type: BatchImageCollateFunction
+    stop_epoch: 8
+    ema_restart_decay: 0.9999
+    base_size: 1024
+    base_size_repeat: 4
+
+
+val_dataloader:
+  type: DataLoader
+
+  dataset:
+    type: CocoDetection
+    img_folder: dataset/images/val
+    ann_file: dataset/annotations/instances_val.json
+    return_masks: False
+
+    transforms:
+      type: Compose
+      ops:
+        - {type: Resize, size: [1024, 1024], }
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+
+  shuffle: False
+  num_workers: 4
+
+  total_batch_size: 8
+
+  collate_fn:
+    type: BatchImageCollateFunction
+
+
+DFINE:
+  backbone: HGNetv2
+
+HGNetv2:
+  name: 'B4'
+  return_idx: [1, 2, 3]
+
+  freeze_stem_only: True
+  freeze_at: 0
+  freeze_norm: True
+
+  pretrained: False
+
+
+optimizer:
+  type: AdamW
+
+  params:
+    -
+      params: '^(?=.*backbone)(?!.*norm|bn).*$'
+      lr: 0.0000025
+
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.
+
+  lr: 0.000025
+
+  betas: [0.9, 0.999]
+  weight_decay: 0.000125
+
+
+epochs: 12
+
+ema:
+  warmups: 0
+
+lr_warmup_scheduler:
+  warmup_duration: 0

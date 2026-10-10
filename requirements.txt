@@ -1,0 +1,31 @@
+# AIC2026 tri-modal detection — dependencies
+#
+# The code targets the D-FINE training/eval stack. Most scripts are plain
+# PyTorch + torchvision + OpenCV and do not need the full stack.
+#
+# D-FINE itself is NOT vendored here; clone it separately:
+#   git clone https://github.com/Peterande/D-FINE
+
+# --- core ---
+torch>=2.0
+torchvision>=0.15
+numpy>=1.23,<2
+
+# --- image / boxes ---
+opencv-python-headless
+pillow
+pycocotools
+
+# --- evaluation / ensembling helpers ---
+scipy
+tqdm
+pyyaml
+
+# --- used by the metric / logging utilities ---
+matplotlib
+pandas
+
+# --- optional, needed only for the tri-modal branches ---
+# (the D-FINE repo brings its own requirements; install them from there)
+# einops
+# timm
